@@ -1,91 +1,195 @@
 import streamlit as st
 import pandas as pd
+import boto3
+import json
 import datetime
 
-# ---------- Stub Functions ----------
-def save_to_dynamodb(transaction):
-    st.success(f"Saved transaction: {transaction}")
+# ----------------- AWS Lambda Client -----------------
+lambda_client = boto3.client("lambda", region_name="ap-southeast-5")
 
-def call_bedrock_summary(data):
-    return "AI Summary: In March, revenue was $18,400. Payroll was the largest expense ($8,200, 45% of costs). Net profit: $6,500."
+def invoke_lambda(func_name, payload):
+    """Helper to call AWS Lambda"""
+    response = lambda_client.invoke(
+        FunctionName=func_name,
+        InvocationType="RequestResponse",
+        Payload=json.dumps(payload),
+    )
+    return json.loads(response["Payload"].read())
 
-def generate_pdf_report(month, year):
-    return f"https://s3.amazonaws.com/your-bucket/{month}-{year}-report.pdf"
-
-def fetch_transactions(month, year):
-    sample = [
-        {"Date": "2025-03-01", "Description": "Consulting Revenue", "Amount": 9200, "Type": "Income", "Category": "Revenue"},
-        {"Date": "2025-03-05", "Description": "Payroll", "Amount": 8200, "Type": "Expense", "Category": "Payroll"},
-        {"Date": "2025-03-10", "Description": "Electricity Bill", "Amount": 326, "Type": "Expense", "Category": "Utilities"},
-    ]
-    return pd.DataFrame(sample)
-
-# ---------- Streamlit UI ----------
-st.set_page_config(page_title="AI Finance Dashboard", layout="wide")
+# ----------------- Streamlit UI -----------------
+st.set_page_config(page_title="AI Finance Dashboard", page_icon="📊", layout="wide")
 st.title("🏦 AI-Powered Finance Dashboard")
 
-tabs = st.tabs(["Overview", "Add Transaction", "Generate / View Reports"])
+tabs = st.tabs(["Overview", "Transactions", "Generate / View Reports"])
 
-# --- TAB 1: Overview (Dashboard Summary) ---
+# --- TAB 1: Overview (latest month/year auto) ---
 with tabs[0]:
-    st.header("🏠 Dashboard Overview")
+    st.markdown("## 🏠 Dashboard Overview")
 
-    month, year = "March", 2025
-    df = fetch_transactions(month, year)
+    # Fetch all transactions
+    try:
+        txns = invoke_lambda("ListTransactionsLambda", {})
+        df = pd.DataFrame(txns)
+    except Exception as e:
+        st.error(f"Error fetching transactions: {e}")
+        df = pd.DataFrame()
 
-    st.subheader(f"📑 Report Summary for {month} {year}")
-    st.dataframe(df)
+    if not df.empty:
+        df["Date"] = pd.to_datetime(df["Date"])
+        latest_date = df["Date"].max()
+        month = latest_date.strftime("%B")
+        year = latest_date.strftime("%Y")
 
-    st.subheader("📊 Charts")
-    st.bar_chart(df.groupby("Type")["Amount"].sum())
-    st.line_chart(df.groupby("Date")["Amount"].sum())
-
-    st.subheader("🤖 AI Insights")
-    summary = call_bedrock_summary(df)
-    st.info(summary)
-
-# --- TAB 2: Add Transaction ---
-with tabs[1]:
-    st.header("➕ Add New Transaction")
-
-    with st.form("add_transaction_form"):
-        date = st.date_input("Date", datetime.date.today())
-        description = st.text_input("Description")
-        amount = st.number_input("Amount", min_value=0.0, step=0.01)
-        txn_type = st.selectbox("Type", ["Income", "Expense"])
-        category = st.text_input("Category (leave blank for AI auto-tag)")
-        receipt = st.file_uploader("Upload Receipt", type=["jpg", "png", "pdf"])
-
-        submitted = st.form_submit_button("Save Transaction")
-        if submitted:
-            transaction = {
-                "Date": str(date),
-                "Description": description,
-                "Amount": amount,
-                "Type": txn_type,
-                "Category": category if category else "AI-Auto",
-                "Receipt": receipt.name if receipt else None
-            }
-            save_to_dynamodb(transaction)
-
-# --- TAB 3: View / Generate Reports ---
-with tabs[2]:
-    st.header("📂 Generate / View Reports")
-
-    year = st.selectbox("Select Year", [2025, 2024, 2023])
-    month = st.selectbox("Select Month", ["March", "February", "January"])
-
-    if st.button("🔍 Show Report"):
-        df = fetch_transactions(month, year)
+        st.markdown(f"### 📑 Report Summary for {month} {year}")
         st.dataframe(df)
 
         st.subheader("📊 Charts")
         st.bar_chart(df.groupby("Type")["Amount"].sum())
-        st.line_chart(df.groupby("Date")["Amount"].sum())
+        st.bar_chart(df.groupby("Category")["Amount"].sum())
 
-        summary = call_bedrock_summary(df)
-        st.info(summary)
+        st.subheader("🤖 Insights")
+        st.info(f"Revenue: {df[df['Type']=='Income']['Amount'].sum()} | "
+                f"Expenses: {df[df['Type']=='Expense']['Amount'].sum()}")
+    else:
+        st.warning("No transactions available.")
 
-    if st.button("📄 Generate Report Now (PDF)"):
-        pdf_url = generate_pdf_report(month, year)
-        st.success(f"Report generated! [Download PDF]({pdf_url})")
+# --- TAB 2: Transactions ---
+with tabs[1]:
+    st.markdown("## 💳 Manage Transactions")
+
+    try:
+        txns = invoke_lambda("ListTransactionsLambda", {})
+        df = pd.DataFrame(txns)
+    except:
+        df = pd.DataFrame()
+
+    if not df.empty:
+        st.subheader("📌 Current Transactions")
+        st.dataframe(df)
+
+    # Add transaction
+    st.subheader("➕ Add New Transaction")
+    with st.form("add_txn"):
+        date = st.date_input("Date", datetime.date.today())
+        desc = st.text_input("Description")
+        amt = st.number_input("Amount", min_value=0.0, step=0.01)
+        ttype = st.selectbox("Type", ["Income", "Expense"])
+        cat = st.text_input("Category (leave blank for AI auto-tag)")
+        receipt = st.file_uploader("Upload Receipt", type=["jpg", "jpeg", "png", "pdf"])
+
+        submitted = st.form_submit_button("Save Transaction")
+        if submitted:
+            payload = {
+                "date": str(date),
+                "description": desc,
+                "amount": amt,
+                "type": ttype,
+                "category": cat,
+            }
+
+            # attach file (if uploaded)
+            if receipt is not None:
+                payload["receipt_name"] = receipt.name
+                payload["receipt_bytes"] = receipt.getvalue().decode("latin1")  # send as string for JSON
+
+            res = invoke_lambda("AddTransactionLambda", payload)
+            st.success(res.get("message", "Transaction added."))
+
+    # Update transaction
+    st.subheader("✏️ Update Transaction")
+    txn_id = st.text_input("Transaction ID to update")
+    new_cat = st.text_input("New Category")
+    if st.button("Update"):
+        res = invoke_lambda("UpdateTransactionLambda", {
+            "transaction_id": txn_id,
+            "updates": {"Category": new_cat}
+        })
+        st.success(res.get("message", "Transaction updated."))
+
+    # Delete transaction
+    st.subheader("❌ Delete Transaction")
+    del_id = st.text_input("Transaction ID to delete")
+    if st.button("Delete"):
+        res = invoke_lambda("DeleteTransactionLambda", {"transaction_id": del_id})
+        st.warning(res.get("message", f"Transaction {del_id} deleted."))
+
+    # CSV Import
+    st.subheader("📤 Upload Transactions CSV")
+    csv_file = st.file_uploader("Upload CSV", type=["csv"])
+    if csv_file:
+        csv_df = pd.read_csv(csv_file)
+        res = invoke_lambda("CsvImportLambda", {
+            "transactions": csv_df.to_dict(orient="records")
+        })
+        st.success(res.get("message", "CSV imported."))
+
+# --- TAB 3: Reports ---
+with tabs[2]:
+    st.markdown("## 📄 Generate / View Reports")
+
+    # Selectors
+    year = st.selectbox("Select Year", [2025, 2024, 2023])
+    month = st.selectbox("Select Month", [
+        "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December"
+    ])
+
+    st.markdown(f"### 📑 Report Summary for {month} {year}")
+
+    if st.button("🔍 Show Report"):
+        # Call your ListTransactionsLambda or GenerateReportLambda
+        res = invoke_lambda("ListTransactionsLambda", {"month": month, "year": year})
+        df = pd.DataFrame(res) if res else pd.DataFrame()
+
+        if not df.empty:
+            st.dataframe(df)
+
+            # Charts
+            st.subheader("📊 Charts")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.bar_chart(df.groupby("Type")["Amount"].sum())
+
+            with col2:
+                expenses = df[df["Type"] == "Expense"]
+                if not expenses.empty:
+                    exp_data = expenses.groupby("Category")["Amount"].sum()
+                    st.write("### 🥧 Expense Breakdown")
+                    st.plotly_chart(
+                        {
+                            "data": [{"type": "pie", "labels": exp_data.index, "values": exp_data.values}],
+                            "layout": {"title": "Expenses by Category"}
+                        }
+                    )
+
+            st.line_chart(df.groupby("Date")["Amount"].sum())
+
+            # AI Summary (styled)
+            revenue = df[df["Type"] == "Income"]["Amount"].sum()
+            expenses_total = df[df["Type"] == "Expense"]["Amount"].sum()
+            net = revenue - expenses_total
+
+            st.markdown(
+                f"""
+                <div style="background-color:#f0f2f6; padding:12px; border-radius:10px;">
+                <b>AI Summary:</b><br>
+                In <b>{month}</b>, revenue was <b style="color:green;">${revenue:,.0f}</b>. <br>
+                Total expenses were <b style="color:red;">${expenses_total:,.0f}</b>. <br>
+                Net profit: <b style="color:blue;">${net:,.0f}</b>.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # Generate Report PDF
+            if st.button("📄 Generate Report Now (PDF)"):
+                pdf_res = invoke_lambda("GenerateReportLambda", {"month": month, "year": year})
+                url = pdf_res.get("report_url")
+                if url:
+                    st.success(f"Report ready! [💾 Download PDF]({url})")
+                else:
+                    st.error("Failed to generate PDF.")
+        else:
+            st.warning("No transactions for this period.")
+
