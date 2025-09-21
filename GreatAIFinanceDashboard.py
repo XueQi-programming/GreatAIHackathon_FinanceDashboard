@@ -204,77 +204,52 @@ with tabs[2]:
     month_key = f"{year}-{month_num:02d}"
 
     if st.button("🔍 Show Report"):
-        # 1️⃣ Get raw transactions for charts
-        txns = invoke_lambda("ListTransactionsLambda", {"month": month_num, "year": year})
-        df = pd.DataFrame(txns) if txns else pd.DataFrame()
-
-        # 2️⃣ Get AI-generated report
         report_res = invoke_lambda("GenerateReportLambda", {"month": month_key})
 
-        # Handle API Gateway "body" JSON
+        # Handle API Gateway "body"
         if "body" in report_res:
             try:
                 body = json.loads(report_res["body"])
-            except Exception:
-                body = report_res["body"]
+            except:
+                body = {}
         else:
             body = report_res
 
+        report = body.get("Report", {})
         summary_text = body.get("SummaryText", "")
         insights = body.get("InsightsList", [])
-        report = body.get("Report", {})
-        json_url = body.get("JSONReport")
         pdf_url = body.get("PDFReport")
+        json_url = body.get("JSONReport")
 
-        # === DISPLAY ===
-        st.markdown(f"### 📑 Report Summary for {month_name} {year}")
+        if report:
+            st.markdown(f"### 📑 Report Summary for {month_name} {year}")
 
-        if not df.empty:
-            # Show raw data
-            st.dataframe(df)
+            # Transactions table
+            st.dataframe(report.get("Transactions", []))  # If you include transactions in Lambda
 
             # Charts
             st.subheader("📊 Charts")
-            col1, col2 = st.columns(2)
+            st.bar_chart([report["TotalIncome"], sum(report["TotalExpenses"].values())])
 
-            with col1:
-                st.bar_chart(df.groupby("Type")["Amount"].sum())
+            # AI Summary
+            if summary_text:
+                st.subheader("🤖 AI Summary")
+                st.info(summary_text)
 
-            with col2:
-                expenses = df[df["Type"] == "Expense"]
-                if not expenses.empty:
-                    exp_data = expenses.groupby("Category")["Amount"].sum()
-                    st.write("### 🥧 Expense Breakdown")
-                    st.plotly_chart({
-                        "data": [{
-                            "type": "pie",
-                            "labels": exp_data.index,
-                            "values": exp_data.values
-                        }],
-                        "layout": {"title": "Expenses by Category"}
-                    })
+            # Insights
+            if insights:
+                st.subheader("💡 Actionable Insights")
+                for i in insights:
+                    st.write(i)
 
-            st.line_chart(df.groupby("Date")["Amount"].sum())
-
+            # Downloads
+            if pdf_url or json_url:
+                st.subheader("📥 Download Reports")
+                if pdf_url:
+                    st.markdown(f"[📄 PDF Report]({pdf_url})", unsafe_allow_html=True)
+                if json_url:
+                    st.markdown(f"[🗂 JSON Report]({json_url})", unsafe_allow_html=True)
         else:
             st.warning("No transactions for this period.")
 
-        # AI summary
-        if summary_text:
-            st.subheader("🤖 AI Summary")
-            st.info(summary_text)
-
-        # AI insights
-        if insights:
-            st.subheader("💡 Actionable Insights")
-            for i in insights:
-                st.write(i)
-
-        # Download links
-        if pdf_url or json_url:
-            st.subheader("📥 Download Reports")
-            if pdf_url:
-                st.markdown(f"[📄 PDF Report]({pdf_url})", unsafe_allow_html=True)
-            if json_url:
-                st.markdown(f"[🗂 JSON Report]({json_url})", unsafe_allow_html=True)
 
