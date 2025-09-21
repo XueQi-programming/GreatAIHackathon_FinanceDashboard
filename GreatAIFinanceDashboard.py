@@ -57,71 +57,74 @@ with tabs[0]:
 with tabs[1]:
     st.markdown("## 💳 Manage Transactions")
 
-    try:
-        txns = invoke_lambda("ListTransactionsLambda", {})
-        df = pd.DataFrame(txns)
-    except:
-        df = pd.DataFrame()
+    # Create sub-tabs for each action
+    txn_tabs = st.tabs(["📋 View All", "➕ Add", "✏️ Update", "❌ Delete", "📤 Import CSV"])
 
-    if not df.empty:
-        st.subheader("📌 Current Transactions")
-        st.dataframe(df)
+    # --- View All Transactions ---
+    with txn_tabs[0]:
+        st.subheader("📋 Current Transactions")
+        try:
+            txns = invoke_lambda("ListTransactionsLambda", {})
+            df = pd.DataFrame(txns)
+            st.dataframe(df)
+        except:
+            st.warning("No transactions available.")
 
-    # Add transaction
-    st.subheader("➕ Add New Transaction")
-    with st.form("add_txn"):
-        date = st.date_input("Date", datetime.date.today())
-        desc = st.text_input("Description")
-        amt = st.number_input("Amount", min_value=0.0, step=0.01)
-        ttype = st.selectbox("Type", ["Income", "Expense"])
-        cat = st.text_input("Category (leave blank for AI auto-tag)")
-        receipt = st.file_uploader("Upload Receipt", type=["jpg", "jpeg", "png", "pdf"])
+    # --- Add Transaction ---
+    with txn_tabs[1]:
+        st.subheader("➕ Add New Transaction")
+        with st.form("add_txn"):
+            date = st.date_input("Date", datetime.date.today())
+            desc = st.text_input("Description")
+            amt = st.number_input("Amount", min_value=0.0, step=0.01)
+            ttype = st.selectbox("Type", ["Income", "Expense"])
+            cat = st.text_input("Category (leave blank for AI auto-tag)")
+            receipt = st.file_uploader("Upload Receipt", type=["jpg", "jpeg", "png", "pdf"])
 
-        submitted = st.form_submit_button("Save Transaction")
-        if submitted:
-            payload = {
-                "date": str(date),
-                "description": desc,
-                "amount": amt,
-                "type": ttype,
-                "category": cat,
-            }
+            if st.form_submit_button("Save Transaction"):
+                payload = {
+                    "date": str(date),
+                    "description": desc,
+                    "amount": amt,
+                    "type": ttype,
+                    "category": cat,
+                }
+                if receipt:
+                    payload["receipt_name"] = receipt.name
+                    payload["receipt_bytes"] = receipt.getvalue().decode("latin1")
+                res = invoke_lambda("AddTransactionLambda", payload)
+                st.success(res.get("message", "Transaction added."))
 
-            # attach file (if uploaded)
-            if receipt is not None:
-                payload["receipt_name"] = receipt.name
-                payload["receipt_bytes"] = receipt.getvalue().decode("latin1")  # send as string for JSON
+    # --- Update Transaction ---
+    with txn_tabs[2]:
+        st.subheader("✏️ Update Transaction")
+        txn_id = st.text_input("Transaction ID to update")
+        new_cat = st.text_input("New Category")
+        if st.button("Update"):
+            res = invoke_lambda("UpdateTransactionLambda", {
+                "transaction_id": txn_id,
+                "updates": {"Category": new_cat}
+            })
+            st.success(res.get("message", "Transaction updated."))
 
-            res = invoke_lambda("AddTransactionLambda", payload)
-            st.success(res.get("message", "Transaction added."))
+    # --- Delete Transaction ---
+    with txn_tabs[3]:
+        st.subheader("❌ Delete Transaction")
+        del_id = st.text_input("Transaction ID to delete")
+        if st.button("Delete"):
+            res = invoke_lambda("DeleteTransactionLambda", {"transaction_id": del_id})
+            st.warning(res.get("message", f"Transaction {del_id} deleted."))
 
-    # Update transaction
-    st.subheader("✏️ Update Transaction")
-    txn_id = st.text_input("Transaction ID to update")
-    new_cat = st.text_input("New Category")
-    if st.button("Update"):
-        res = invoke_lambda("UpdateTransactionLambda", {
-            "transaction_id": txn_id,
-            "updates": {"Category": new_cat}
-        })
-        st.success(res.get("message", "Transaction updated."))
-
-    # Delete transaction
-    st.subheader("❌ Delete Transaction")
-    del_id = st.text_input("Transaction ID to delete")
-    if st.button("Delete"):
-        res = invoke_lambda("DeleteTransactionLambda", {"transaction_id": del_id})
-        st.warning(res.get("message", f"Transaction {del_id} deleted."))
-
-    # CSV Import
-    st.subheader("📤 Upload Transactions CSV")
-    csv_file = st.file_uploader("Upload CSV", type=["csv"])
-    if csv_file:
-        csv_df = pd.read_csv(csv_file)
-        res = invoke_lambda("CsvImportLambda", {
-            "transactions": csv_df.to_dict(orient="records")
-        })
-        st.success(res.get("message", "CSV imported."))
+    # --- Import CSV ---
+    with txn_tabs[4]:
+        st.subheader("📤 Upload Transactions CSV")
+        csv_file = st.file_uploader("Upload CSV", type=["csv"])
+        if csv_file:
+            csv_df = pd.read_csv(csv_file)
+            res = invoke_lambda("CsvImportLambda", {
+                "transactions": csv_df.to_dict(orient="records")
+            })
+            st.success(res.get("message", "CSV imported."))
 
 # --- TAB 3: Reports ---
 with tabs[2]:
