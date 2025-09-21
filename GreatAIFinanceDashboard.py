@@ -98,14 +98,48 @@ with tabs[1]:
     # --- Update Transaction ---
     with txn_tabs[2]:
         st.subheader("✏️ Update Transaction")
-        txn_id = st.text_input("Transaction ID to update")
-        new_cat = st.text_input("New Category")
-        if st.button("Update"):
-            res = invoke_lambda("UpdateTransactionLambda", {
-                "transaction_id": txn_id,
-                "updates": {"Category": new_cat}
-            })
-            st.success(res.get("message", "Transaction updated."))
+
+        txn_id = st.text_input("Enter Transaction ID")
+        if txn_id:
+            # Fetch all transactions
+            txns = invoke_lambda("ListTransactionsLambda", {})
+            df = pd.DataFrame(txns)
+
+            if not df.empty and txn_id in df["TransactionID"].values:
+                txn = df[df["TransactionID"] == txn_id].iloc[0]
+
+                # Pre-filled form
+                with st.form("update_txn"):
+                    date = st.date_input("Date", pd.to_datetime(txn["Date"]))
+                    desc = st.text_input("Description", txn["Description"])
+                    amt = st.number_input("Amount", value=float(txn["Amount"]), step=0.01)
+                    ttype = st.selectbox("Type", ["Income", "Expense"], index=0 if txn["Type"]=="Income" else 1)
+                    cat = st.text_input("Category", txn["Category"])
+
+                    submitted = st.form_submit_button("Update Transaction")
+                    if submitted:
+                        updates = {}
+                        if str(date) != txn["Date"]:
+                            updates["Date"] = str(date)
+                        if desc != txn["Description"]:
+                            updates["Description"] = desc
+                        if float(amt) != float(txn["Amount"]):
+                            updates["Amount"] = amt
+                        if ttype != txn["Type"]:
+                            updates["Type"] = ttype
+                        if cat != txn["Category"]:
+                            updates["Category"] = cat
+
+                        if updates:
+                            res = invoke_lambda("UpdateTransactionLambda", {
+                                "transaction_id": txn_id,
+                                "updates": updates
+                            })
+                            st.success(res.get("message", "Transaction updated."))
+                        else:
+                            st.info("No changes made.")
+            else:
+                st.warning("Transaction ID not found.")
 
     # --- Delete Transaction ---
     with txn_tabs[3]:
