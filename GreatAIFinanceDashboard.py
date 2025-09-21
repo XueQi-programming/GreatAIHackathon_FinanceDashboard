@@ -193,18 +193,47 @@ with tabs[1]:
 with tabs[2]:
     st.markdown("## 📄 Generate / View Reports")
     year = st.selectbox("Select Year", [2025, 2024, 2023])
-    month = st.selectbox("Select Month", [
-        "January","February","March","April","May","June",
-        "July","August","September","October","November","December"
-    ])
-    st.markdown(f"### 📑 Report Summary for {month} {year}")
+    month_name = st.selectbox(
+        "Select Month",
+        ["January","February","March","April","May","June",
+         "July","August","September","October","November","December"]
+    )
+    
+    # Convert month name to number (for YYYY-MM)
+    month_num = datetime.datetime.strptime(month_name, "%B").month
+    month_key = f"{year}-{month_num:02d}"
 
     if st.button("🔍 Show Report"):
-        res = invoke_lambda("ListTransactionsLambda", {"month": month, "year": year})
-        df = pd.DataFrame(res) if res else pd.DataFrame()
+        # 1️⃣ Get raw transactions for charts
+        txns = invoke_lambda("ListTransactionsLambda", {"month": month_num, "year": year})
+        df = pd.DataFrame(txns) if txns else pd.DataFrame()
+
+        # 2️⃣ Get AI-generated report
+        report_res = invoke_lambda("GenerateReportLambda", {"month": month_key})
+
+        # Handle API Gateway "body" JSON
+        if "body" in report_res:
+            try:
+                body = json.loads(report_res["body"])
+            except Exception:
+                body = report_res["body"]
+        else:
+            body = report_res
+
+        summary_text = body.get("SummaryText", "")
+        insights = body.get("InsightsList", [])
+        report = body.get("Report", {})
+        json_url = body.get("JSONReport")
+        pdf_url = body.get("PDFReport")
+
+        # === DISPLAY ===
+        st.markdown(f"### 📑 Report Summary for {month_name} {year}")
 
         if not df.empty:
+            # Show raw data
             st.dataframe(df)
+
+            # Charts
             st.subheader("📊 Charts")
             col1, col2 = st.columns(2)
 
@@ -216,36 +245,36 @@ with tabs[2]:
                 if not expenses.empty:
                     exp_data = expenses.groupby("Category")["Amount"].sum()
                     st.write("### 🥧 Expense Breakdown")
-                    st.plotly_chart(
-                        {
-                            "data": [{"type": "pie", "labels": exp_data.index, "values": exp_data.values}],
-                            "layout": {"title": "Expenses by Category"}
-                        }
-                    )
+                    st.plotly_chart({
+                        "data": [{
+                            "type": "pie",
+                            "labels": exp_data.index,
+                            "values": exp_data.values
+                        }],
+                        "layout": {"title": "Expenses by Category"}
+                    })
 
             st.line_chart(df.groupby("Date")["Amount"].sum())
-            revenue = df[df["Type"] == "Income"]["Amount"].sum()
-            expenses_total = df[df["Type"] == "Expense"]["Amount"].sum()
-            net = revenue - expenses_total
 
-            st.markdown(
-                f"""
-                <div style="background-color:#f0f2f6; padding:12px; border-radius:10px;">
-                <b>AI Summary:</b><br>
-                In <b>{month}</b>, revenue was <b style="color:green;">${revenue:,.0f}</b>. <br>
-                Total expenses were <b style="color:red;">${expenses_total:,.0f}</b>. <br>
-                Net profit: <b style="color:blue;">${net:,.0f}</b>.
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-            if st.button("📄 Generate Report Now (PDF)"):
-                pdf_res = invoke_lambda("GenerateReportLambda", {"month": month, "year": year})
-                url = pdf_res.get("report_url")
-                if url:
-                    st.success(f"Report ready! [💾 Download PDF]({url})")
-                else:
-                    st.error("Failed to generate PDF.")
         else:
             st.warning("No transactions for this period.")
+
+        # AI summary
+        if summary_text:
+            st.subheader("🤖 AI Summary")
+            st.info(summary_text)
+
+        # AI insights
+        if insights:
+            st.subheader("💡 Actionable Insights")
+            for i in insights:
+                st.write(i)
+
+        # Download links
+        if pdf_url or json_url:
+            st.subheader("📥 Download Reports")
+            if pdf_url:
+                st.markdown(f"[📄 PDF Report]({pdf_url})", unsafe_allow_html=True)
+            if json_url:
+                st.markdown(f"[🗂 JSON Report]({json_url})", unsafe_allow_html=True)
+
