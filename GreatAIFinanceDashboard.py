@@ -201,7 +201,7 @@ with tabs[2]:
     
     # Convert month name to number (for YYYY-MM)
     month_num = datetime.datetime.strptime(month_name, "%B").month
-    month_key = f"{year}-{month_num:02d}"
+    month_key = f"{year}-{month_num:02d}"   # ensures "2025-09"
 
     if st.button("🔍 Show Report"):
         report_res = invoke_lambda("GenerateReportLambda", {"month": month_key})
