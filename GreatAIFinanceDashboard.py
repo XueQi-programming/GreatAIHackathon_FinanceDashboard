@@ -6,7 +6,7 @@ import datetime
 import requests  
 
 # ----------------- API Gateway (for hackathon) -----------------
-BASE_URL = "https://<your-api-id>.execute-api.ap-southeast-1.amazonaws.com/Hackathon"
+BASE_URL = "https://iabu6nhilc.execute-api.ap-southeast-5.amazonaws.com/Hackathon"
 
 def invoke_lambda_http(func_name, payload):
     """Call Lambda via API Gateway (hackathon-friendly, no AWS creds needed)"""
