@@ -178,8 +178,14 @@ with tabs[1]:
         csv_file = st.file_uploader("Upload CSV", type=["csv"])
         if csv_file:
             csv_df = pd.read_csv(csv_file)
+
+            # ✅ Convert to JSON-safe types
+            transactions = json.loads(
+                csv_df.to_json(orient="records", date_format="iso")
+            )
+
             res = invoke_lambda("CsvImportLambda", {
-                "transactions": csv_df.to_dict(orient="records")
+                "transactions": transactions
             })
             st.success(res.get("message", "CSV imported."))
 
