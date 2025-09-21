@@ -3,18 +3,53 @@ import pandas as pd
 import boto3
 import json
 import datetime
+import requests  
 
-# ----------------- AWS Lambda Client -----------------
+# ----------------- API Gateway (for hackathon) -----------------
+BASE_URL = "https://<your-api-id>.execute-api.ap-southeast-1.amazonaws.com/Hackathon"
+
+def invoke_lambda_http(func_name, payload):
+    """Call Lambda via API Gateway (hackathon-friendly, no AWS creds needed)"""
+    routes = {
+        "ListTransactionsLambda": ("GET", "/transactions"),
+        "AddTransactionLambda": ("POST", "/transactions"),
+        "UpdateTransactionLambda": ("PUT", "/transactions"),
+        "DeleteTransactionLambda": ("DELETE", "/transactions"),
+        "CsvImportLambda": ("POST", "/csvimport"),
+        "GenerateReportLambda": ("POST", "/report"),
+    }
+
+    method, route = routes.get(func_name, ("POST", "/unknown"))
+    url = f"{BASE_URL}{route}"
+
+    if method == "GET":
+        r = requests.get(url, params=payload)
+    elif method == "PUT":
+        r = requests.put(url, json=payload)
+    elif method == "DELETE":
+        r = requests.delete(url, json=payload)
+    else:  # POST
+        r = requests.post(url, json=payload)
+
+    try:
+        return r.json()
+    except Exception:
+        return {"error": r.text}
+
+# ----------------- AWS Lambda Client (keep original) -----------------
 lambda_client = boto3.client("lambda", region_name="ap-southeast-5")
 
-def invoke_lambda(func_name, payload):
-    """Helper to call AWS Lambda"""
+def invoke_lambda_boto3(func_name, payload):
+    """Helper to call AWS Lambda (boto3 way, requires IAM creds)"""
     response = lambda_client.invoke(
         FunctionName=func_name,
         InvocationType="RequestResponse",
         Payload=json.dumps(payload),
     )
     return json.loads(response["Payload"].read())
+
+# ----------------- Switch to API Gateway for Hackathon -----------------
+invoke_lambda = invoke_lambda_http  # overwrite here
 
 # ----------------- Streamlit UI -----------------
 st.set_page_config(page_title="AI Finance Dashboard", page_icon="📊", layout="wide")
@@ -26,7 +61,6 @@ tabs = st.tabs(["Overview", "Transactions", "Generate / View Reports"])
 with tabs[0]:
     st.markdown("## 🏠 Dashboard Overview")
 
-    # Fetch all transactions
     try:
         txns = invoke_lambda("ListTransactionsLambda", {})
         df = pd.DataFrame(txns)
@@ -56,11 +90,9 @@ with tabs[0]:
 # --- TAB 2: Transactions ---
 with tabs[1]:
     st.markdown("## 💳 Manage Transactions")
-
-    # Create sub-tabs for each action
     txn_tabs = st.tabs(["📋 View All", "➕ Add", "✏️ Update", "❌ Delete", "📤 Import CSV"])
 
-    # --- View All Transactions ---
+    # View All
     with txn_tabs[0]:
         st.subheader("📋 Current Transactions")
         try:
@@ -70,7 +102,7 @@ with tabs[1]:
         except:
             st.warning("No transactions available.")
 
-    # --- Add Transaction ---
+    # Add
     with txn_tabs[1]:
         st.subheader("➕ Add New Transaction")
         with st.form("add_txn"):
@@ -95,20 +127,16 @@ with tabs[1]:
                 res = invoke_lambda("AddTransactionLambda", payload)
                 st.success(res.get("message", "Transaction added."))
 
-    # --- Update Transaction ---
+    # Update
     with txn_tabs[2]:
         st.subheader("✏️ Update Transaction")
-
         txn_id = st.text_input("Enter Transaction ID")
         if txn_id:
-            # Fetch all transactions
             txns = invoke_lambda("ListTransactionsLambda", {})
             df = pd.DataFrame(txns)
 
             if not df.empty and txn_id in df["TransactionID"].values:
                 txn = df[df["TransactionID"] == txn_id].iloc[0]
-
-                # Pre-filled form
                 with st.form("update_txn"):
                     date = st.date_input("Date", pd.to_datetime(txn["Date"]))
                     desc = st.text_input("Description", txn["Description"])
@@ -119,16 +147,11 @@ with tabs[1]:
                     submitted = st.form_submit_button("Update Transaction")
                     if submitted:
                         updates = {}
-                        if str(date) != txn["Date"]:
-                            updates["Date"] = str(date)
-                        if desc != txn["Description"]:
-                            updates["Description"] = desc
-                        if float(amt) != float(txn["Amount"]):
-                            updates["Amount"] = amt
-                        if ttype != txn["Type"]:
-                            updates["Type"] = ttype
-                        if cat != txn["Category"]:
-                            updates["Category"] = cat
+                        if str(date) != txn["Date"]: updates["Date"] = str(date)
+                        if desc != txn["Description"]: updates["Description"] = desc
+                        if float(amt) != float(txn["Amount"]): updates["Amount"] = amt
+                        if ttype != txn["Type"]: updates["Type"] = ttype
+                        if cat != txn["Category"]: updates["Category"] = cat
 
                         if updates:
                             res = invoke_lambda("UpdateTransactionLambda", {
@@ -141,7 +164,7 @@ with tabs[1]:
             else:
                 st.warning("Transaction ID not found.")
 
-    # --- Delete Transaction ---
+    # Delete
     with txn_tabs[3]:
         st.subheader("❌ Delete Transaction")
         del_id = st.text_input("Transaction ID to delete")
@@ -149,7 +172,7 @@ with tabs[1]:
             res = invoke_lambda("DeleteTransactionLambda", {"transaction_id": del_id})
             st.warning(res.get("message", f"Transaction {del_id} deleted."))
 
-    # --- Import CSV ---
+    # Import CSV
     with txn_tabs[4]:
         st.subheader("📤 Upload Transactions CSV")
         csv_file = st.file_uploader("Upload CSV", type=["csv"])
@@ -163,25 +186,19 @@ with tabs[1]:
 # --- TAB 3: Reports ---
 with tabs[2]:
     st.markdown("## 📄 Generate / View Reports")
-
-    # Selectors
     year = st.selectbox("Select Year", [2025, 2024, 2023])
     month = st.selectbox("Select Month", [
-        "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"
+        "January","February","March","April","May","June",
+        "July","August","September","October","November","December"
     ])
-
     st.markdown(f"### 📑 Report Summary for {month} {year}")
 
     if st.button("🔍 Show Report"):
-        # Call your ListTransactionsLambda or GenerateReportLambda
         res = invoke_lambda("ListTransactionsLambda", {"month": month, "year": year})
         df = pd.DataFrame(res) if res else pd.DataFrame()
 
         if not df.empty:
             st.dataframe(df)
-
-            # Charts
             st.subheader("📊 Charts")
             col1, col2 = st.columns(2)
 
@@ -201,8 +218,6 @@ with tabs[2]:
                     )
 
             st.line_chart(df.groupby("Date")["Amount"].sum())
-
-            # AI Summary (styled)
             revenue = df[df["Type"] == "Income"]["Amount"].sum()
             expenses_total = df[df["Type"] == "Expense"]["Amount"].sum()
             net = revenue - expenses_total
@@ -219,7 +234,6 @@ with tabs[2]:
                 unsafe_allow_html=True
             )
 
-            # Generate Report PDF
             if st.button("📄 Generate Report Now (PDF)"):
                 pdf_res = invoke_lambda("GenerateReportLambda", {"month": month, "year": year})
                 url = pdf_res.get("report_url")
@@ -229,4 +243,3 @@ with tabs[2]:
                     st.error("Failed to generate PDF.")
         else:
             st.warning("No transactions for this period.")
-
